@@ -1,8 +1,11 @@
 # The directory containing ralph_assets sources.
 SOURCE_PATH = src/ralph_assets
 
-# The directory containing ralph_assets sources.
+# The directory containing build data.
 BUILD_PATH = build
+
+# The directory containing eggs.
+BUILD_PATH = src/ralph_assets.egg-info
 
 # Just invoke make to check your code!
 
@@ -16,11 +19,10 @@ default: lint
 
 help:
 	@echo "Available targets:"
-	@echo "    clean                     clean the source tree"
+	@echo "    clean-all                 clean-pyc clena-vim remove builds and eggs"
 	@echo "    clean-pyc                 clean all *.pyc files"
-	@echo "    lint                      run pep8 and pylint"
-	@echo "    pre-commit                run pre-commit testing"
-	@echo "    setup                     initialize the repositiory for development"
+	@echo "    clean-vim                 clean vim files like *.swo *.swp *.swn"
+	@echo "    lint                      run flake8 exclude migrations"
 
 
 # Cleaning
@@ -50,18 +52,3 @@ lint: flake8
 
 flake8:
 	flake8 --exclude=migrations $(SOURCE_PATH)
-
-
-# Pre-commit testing.
-
-.PHONY: pre-commit
-
-pre-commit: lint
-
-
-# Development environment setup.
-
-.PHONY: setup git-hooks
-
-setup-hooks:
-	ln -fs ../../scripts/pre-commit .git/hooks/pre-commit

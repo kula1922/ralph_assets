@@ -16,6 +16,7 @@ def get_warehouses():
         yield {
             'warehouse_id': warehouse.id,
             'warehouse_name': warehouse.name,
+            'warehouse_type': warehouse.type,
         }
 
 

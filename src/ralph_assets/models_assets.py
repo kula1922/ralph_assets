@@ -281,6 +281,12 @@ class AssetCategory(
         return self.name
 
 
+class WarehouseType(Choices):
+    _ = Choices.Choice
+    datacenter = _('Datacenter')
+    backoffice = _('Backoffice')
+
+
 class Warehouse(
     TimeTrackable,
     EditorTrackable,
@@ -288,6 +294,13 @@ class Warehouse(
     WithConcurrentGetOrCreate,
     CreatableFromString,
 ):
+    type = models.PositiveIntegerField(
+        verbose_name=_("Warehouse type"),
+        choices=WarehouseType(),
+        null=True,
+        blank=True,
+    )
+
     def __unicode__(self):
         return self.name
 

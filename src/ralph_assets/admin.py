@@ -106,8 +106,8 @@ admin.site.register(ImportProblem, ImportProblemAdmin)
 
 class WarehouseAdmin(ModelAdmin):
     save_on_top = True
-    list_display = ('name',)
-    search_fields = ('name',)
+    list_display = ('name', 'type')
+    search_fields = ('name', 'type')
 
 
 admin.site.register(Warehouse, WarehouseAdmin)

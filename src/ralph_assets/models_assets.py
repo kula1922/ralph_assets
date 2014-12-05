@@ -697,9 +697,13 @@ class Asset(
         except Device.DoesNotExist:
             return None
 
+    @classmethod
+    def get_synced_fields(cls):
+        return ['service', 'device_environment']
+
     def get_synced_objs_and_fields(self):
         # Implementation of the abstract method from SyncFieldMixin.
-        fields = ['service', 'device_environment']
+        fields = self.get_synced_fields()
         obj = self.get_ralph_device()
         return [(obj, fields)] if obj else []
 

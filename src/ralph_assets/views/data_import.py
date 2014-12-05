@@ -26,7 +26,11 @@ from django.template.defaultfilters import slugify
 from django.utils.dateparse import parse_date, parse_datetime
 from lck.django.common.models import Named
 from ralph.account.models import Region
-from ralph.discovery.models_device import DeviceEnvironment, ServiceCatalog
+from ralph.discovery.models_device import (
+    DeviceEnvironment,
+    ServiceCatalog,
+    Device,
+)
 
 from ralph_assets.forms_import import (
     ColumnChoiceField,
@@ -125,6 +129,72 @@ class XlsUploadView(SessionWizardView, AssetsBase):
             self.storage.data['mappings'] = mappings
         return form
 
+    def _update_synced_fields(
+        self,
+        all_columns,
+        table_to_add,
+        devices_data,
+        fields_to_be_filled,
+        barcode_index,
+    ):
+        for field_to_fill in fields_to_be_filled:
+            all_columns.append(field_to_fill)
+
+        for row in table_to_add:
+            barcode = row[barcode_index]
+            device_data = devices_data.get(barcode, {})
+            for field_to_fill in fields_to_be_filled:
+                row.append(device_data.get(field_to_fill, ''))
+        return all_columns, table_to_add
+
+    def _get_devices_data(
+        self,
+        barcode_index,
+        table_to_add,
+        fields_to_be_filled,
+    ):
+        barcodes_to_check = []
+        for row in table_to_add:
+            barcodes_to_check.append(row[barcode_index])
+
+        ralph_devices = {}
+        for device in Device.objects.filter(
+            barcode__in=barcodes_to_check,
+        ):
+            ralph_device = {}
+            for field in fields_to_be_filled:
+                ralph_device[field] = getattr(device, field)
+            ralph_devices[device.barcode] = ralph_device
+
+        return ralph_devices
+
+    def _update_synced_data(self, all_columns, table_to_add):
+        fields_to_be_filled = []
+        for synced_field in Asset.get_synced_fields():
+            if synced_field not in all_columns:
+                fields_to_be_filled.append(synced_field)
+
+        if len(fields_to_be_filled) > 0:
+            try:
+                barcode_index = all_columns.index('barcode')
+            except ValueError:
+                barcode_index = None
+            if barcode_index:
+                devices_data = self._get_devices_data(
+                    barcode_index,
+                    table_to_add,
+                    fields_to_be_filled,
+                )
+                all_columns, table_to_add = self._update_synced_fields(
+                    all_columns,
+                    table_to_add,
+                    devices_data,
+                    fields_to_be_filled,
+                    barcode_index,
+                )
+
+        return all_columns, table_to_add
+
     def get_context_data(self, form, **kwargs):
         data = super(XlsUploadView, self).get_context_data(form, **kwargs)
         if self.steps.current == 'confirm':
@@ -145,7 +215,7 @@ class XlsUploadView(SessionWizardView, AssetsBase):
                 for column in all_columns:
                     row.append(asset_data.get(column, ''))
                 update_table.append(row)
-            add_table = []
+            table_to_add = []
             for sheet_name, sheet_data in add_per_sheet.items():
                 for asset_data in sheet_data:
                     asset_data = dict(
@@ -156,11 +226,15 @@ class XlsUploadView(SessionWizardView, AssetsBase):
                     row = []
                     for column in all_columns:
                         row.append(asset_data.get(column, ''))
-                    add_table.append(row)
+                    table_to_add.append(row)
+            all_columns, table_to_add = self._update_synced_data(
+                all_columns,
+                table_to_add,
+            )
             data['all_columns'] = all_columns
             data['all_column_names'] = all_column_names
             data['update_table'] = update_table
-            data['add_table'] = add_table
+            data['add_table'] = table_to_add
         data['section'] = None
         return data
 

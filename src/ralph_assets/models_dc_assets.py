@@ -272,12 +272,8 @@ class RackAccessory(models.Model):
 
 
 class DeviceInfo(TimeTrackable, SavingUser, SoftDeletable):
-    ralph_device_id = models.IntegerField(
-        verbose_name=_("Ralph device id"),
-        null=True,
-        blank=True,
-        unique=True,
-        default=None,
+    ralph_device = models.OneToOneField(
+        Device, null=True, blank=True, default=None,
     )
     u_level = models.CharField(max_length=10, null=True, blank=True)
     u_height = models.CharField(max_length=10, null=True, blank=True)
@@ -294,6 +290,16 @@ class DeviceInfo(TimeTrackable, SavingUser, SoftDeletable):
         choices=Orientation(),
         default=Orientation.front.id,
     )
+
+    # @property
+    # def ralph_device_id(self):
+    #     # return self.ralph_device_id_old
+    #     if self.ralph_device:
+    #         return self.ralph_device.id
+
+    # @ralph_device_id.setter
+    # def ralph_device_id(self, value):
+    #     self.ralph_device_id_old = value
 
     def clean_fields(self, exclude=None):
         """

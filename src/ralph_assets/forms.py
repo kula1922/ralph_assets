@@ -540,7 +540,7 @@ class DeviceForm(ModelForm):
             'orientation',
             'position',
             'slot_no',
-            'ralph_device_id',
+            'ralph_device',
         )
 
     force_unlink = BooleanField(required=False, label=_('Force unlink'))
@@ -554,7 +554,7 @@ class DeviceForm(ModelForm):
         exclude = kwargs.pop('exclude', None)
         super(DeviceForm, self).__init__(*args, **kwargs)
 
-        self.fields['ralph_device_id'] = AutoCompleteSelectField(
+        self.fields['ralph_device'] = AutoCompleteSelectField(
             LOOKUPS['ralph_device'],
             required=False,
             help_text=_('Enter ralph id, barcode, sn, or model.'),

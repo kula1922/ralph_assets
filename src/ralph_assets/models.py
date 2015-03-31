@@ -12,8 +12,11 @@ from django.contrib.auth.models import User
 from django.core.urlresolvers import reverse
 from django.utils.html import escape
 from django.utils.translation import ugettext_lazy as _
+from django.db import connection
 from django.db.models import Q
 
+from ralph.business.models import Department
+from ralph.middleware import get_actual_regions
 from ralph_assets.models_assets import (
     Asset,
     AssetCategory,
@@ -49,10 +52,29 @@ from ralph.ui.channels import RestrictedLookupChannel
 from ralph_assets.models_util import (
     WithForm,
 )
+from ralph_assets.models_dc_assets import ServerRoom, Rack
 from ralph.discovery.models import Device, DeviceType
 
 
 RALPH_DATE_FORMAT = '%Y-%m-%d'
+
+
+class ServerRoomLookup(RestrictedLookupChannel):
+    model = ServerRoom
+
+    def get_query(self, pk, request):
+        return ServerRoom.objects.filter(
+            Q(data_center__pk=pk),
+        ).order_by('name')
+
+
+class RackLookup(RestrictedLookupChannel):
+    model = Rack
+
+    def get_query(self, pk, request):
+        return Rack.objects.filter(
+            Q(server_room__pk=pk)
+        ).order_by('name')
 
 
 class DeviceLookup(RestrictedLookupChannel):
@@ -91,9 +113,9 @@ class LinkedDeviceNameLookup(DeviceLookup):
             'id', flat=True
         ).filter(name__icontains=text)
         query = Q(
-            Q(barcode__icontains=text)
-            | Q(sn__icontains=text)
-            | Q(device_info__ralph_device_id__in=matched_devices_ids)
+            Q(barcode__icontains=text) |
+            Q(sn__icontains=text) |
+            Q(device_info__ralph_device_id__in=matched_devices_ids)
         )
         return self.get_base_objects().filter(query).order_by()[:10]
 
@@ -114,47 +136,56 @@ class FreeLicenceLookup(RestrictedLookupChannel):
     """Lookup the licences that have any specimen left."""
 
     model = Licence
+    min_length = 4
 
     def get_query(self, query, request):
-        expression = '%{}%'.format(query)
-        return self.model.objects.raw(
-            """SELECT
-                ralph_assets_licence.*,
-                ralph_assets_softwarecategory.name,
-                (
-                    COUNT(ralph_assets_licenceasset.asset_id)  +
-                    COUNT(ralph_assets_licenceuser.user_id)
-                ) AS used
-            FROM
-                ralph_assets_licence
+        cursor = connection.cursor()
+        raw_sql = """
+        SELECT
+            ralph_assets_licence.id,
+            number_bought - IFNULL(SUM(quantity), 0) as on_stock
+        FROM
+            ralph_assets_licence
             INNER JOIN ralph_assets_softwarecategory ON (
-                ralph_assets_licence.software_category_id =
-                ralph_assets_softwarecategory.id
+                ralph_assets_licence.software_category_id =	ralph_assets_softwarecategory.id
             )
-            LEFT JOIN ralph_assets_licenceasset ON (
-                ralph_assets_licence.id =
-                ralph_assets_licenceasset.licence_id
-            )
-            LEFT JOIN ralph_assets_licenceuser ON (
-                ralph_assets_licence.id =
-                ralph_assets_licenceuser.licence_id
-            )
-            WHERE
-                ralph_assets_softwarecategory.name LIKE %s
-            OR
-                ralph_assets_licence.niw LIKE %s
-            GROUP BY ralph_assets_licence.id
-            HAVING used < ralph_assets_licence.number_bought
-            LIMIT 10;
-            """,
-            (expression, expression)
+            LEFT JOIN (
+                SELECT licence_id, quantity FROM ralph_assets_licenceasset
+                UNION ALL
+                SELECT licence_id, quantity FROM ralph_assets_licenceuser) t ON
+                    t.licence_id = ralph_assets_licence.id
+        WHERE
+            ralph_assets_licence.region_id IN (select uu.id from account_region uu where uu.name in ({region_expression}))
+        AND (
+            ralph_assets_softwarecategory.name like %s
+        OR
+            ralph_assets_licence.niw LIKE %s
         )
+        GROUP by
+            ralph_assets_licence.id
+        HAVING
+            on_stock > 0
+        ORDER BY
+            number_bought DESC
+        LIMIT 10
+        """  # noqa
+        regions = [region.name for region in get_actual_regions()]
+        region_expression = ', '.join(['%s'] * len(regions))
+        raw_sql = raw_sql.format(region_expression=region_expression)
+        expression = '%{}%'.format(query)
+
+        args = []
+        args.extend(regions)
+        args.extend([expression] * 2)
+        cursor.execute(raw_sql, args)
+        ids = [row[0] for row in cursor.fetchall()]
+        results = Licence.objects.filter(id__in=ids)
+        return results
 
     def get_result(self, obj):
         return obj.id
 
     def format_item_display(self, obj):
-        free = str(obj.number_bought - obj.assets.count() - obj.users.count())
         return """
         <span>{name}</span>
         <span class="licence-niw">{niw}</span>
@@ -162,7 +193,7 @@ class FreeLicenceLookup(RestrictedLookupChannel):
         """.format(
             name=escape(str(obj)),
             niw=obj.niw,
-            free=free,
+            free=obj.free,
         )
 
 
@@ -443,6 +474,14 @@ class UserLookup(RestrictedLookupChannel):
             last_name=obj.last_name,
             department=obj.profile.department,
         )
+
+
+class VentureDepartmentLookup(RestrictedLookupChannel):
+    model = Department
+
+    def get_query(self, q, request):
+        return self.model.objects.filter(
+            name__icontains=q).order_by('name')[:10]
 
 
 def get_edit_url(object_):

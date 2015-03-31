@@ -19,6 +19,7 @@ from django.test.utils import override_settings
 from ralph.ui.tests.global_utils import login_as_su
 from ralph.ui.tests.global_utils import UserFactory
 from ralph_assets import signals
+from ralph_assets.exceptions import PostTransitionException
 from ralph_assets.models_assets import Asset
 from ralph_assets.models_transition import Action
 from ralph_assets.tests.utils import MessagesTestMixin
@@ -56,6 +57,8 @@ unassign_actions = [
     'unassign_loan_end_date',
     'unassign_licences'
 ]
+
+SUCCESS_MSG = "Transitions performed successfully"
 
 
 def prepare_transition(slug, actions=None, required_report=False):
@@ -160,7 +163,7 @@ class TestTransitionHostname(MessagesTestMixin, TestCase):
 
     def test_successful_post_transition(self):
         """
-        Transition is done successfully.
+        Transition is done successfully when post_transition success.
         """
         @django.dispatch.receiver(signals.post_transition)
         def post_transition_handler(
@@ -172,30 +175,30 @@ class TestTransitionHostname(MessagesTestMixin, TestCase):
         response = self.client.post(url, post_data, follow=True)
         self.assertEqual(len(response.context['messages']), 1)
         self.assertEqual(
-            str(response.context['messages']._loaded_messages[0]),
-            "Transitions performed successfully",
+            str(response.context['messages']._loaded_messages[0]), SUCCESS_MSG,
         )
 
     def test_failed_post_transition(self):
         """
-        Transition is done unsuccessfully.
+        Transition is done successfully despite of failed post_transition
+        signal.
         """
+        error_msg = "Unable to generate document - try later, please."
+
         @django.dispatch.receiver(signals.post_transition)
         def post_transition_handler(
             sender, user, assets, transition, **kwargs
         ):
-            from ralph_assets.views import transition
-            raise transition.PostTransitionException(
-                "Unable to generate document - try later, please."
-            )
+            raise PostTransitionException(error_msg)
 
         url, post_data = self._get_simple_transition_data()
         response = self.client.post(url, post_data, follow=True)
-        self.assertEqual(len(response.context['messages']), 1)
-        self.assertEqual(
-            str(response.context['messages']._loaded_messages[0]),
-            "Unable to generate document - try later, please.",
-        )
+        found_msges = {
+            str(msg) for msg in response.context['messages']._loaded_messages
+        }
+        self.assertEqual(len(found_msges), 2)
+        for msg in [error_msg, SUCCESS_MSG]:
+            self.assertIn(msg, found_msges)
 
 
 @override_settings(ASSETS_TRANSITIONS=ASSETS_TRANSITIONS)

@@ -22,6 +22,7 @@ from inkpy.api import generate_pdf
 from lck.django.common import nested_commit_on_success
 
 from ralph_assets import signals
+from ralph_assets.exceptions import PostTransitionException
 from ralph_assets.forms_transitions import TransitionForm
 from ralph_assets.models import (
     ReportOdtSourceLanguage,
@@ -39,11 +40,6 @@ from ralph_assets.views.search import _AssetSearch
 
 
 logger = logging.getLogger(__name__)
-
-
-class PostTransitionException(Exception):
-    """General exception to be thrown in *post_transition* signal receivers.
-    Exception message is used to inform user."""
 
 
 class TransitionDispatcher(object):
@@ -337,8 +333,8 @@ class TransitionView(ActiveSubmoduleByAssetMixin, _AssetSearch):
             )
 
         if (
-            self.assets.filter(model__category__code='').count() > 0
-            and self.change_hostname
+            self.assets.filter(model__category__code='').count() > 0 and
+            self.change_hostname
         ):
             messages.error(
                 self.request, _("Asset has no assigned category with code"),
@@ -346,10 +342,10 @@ class TransitionView(ActiveSubmoduleByAssetMixin, _AssetSearch):
             error = True
         # check assets has assigned user
         if (
-            self.transition_type in required_user_transitions
-            or (
-                not self.assign_user
-                and self.transition_type not in not_required_user_transitions
+            self.transition_type in required_user_transitions or
+            (
+                not self.assign_user and
+                self.transition_type not in not_required_user_transitions
             )
         ):
             assets = self.assets.values('user__username').distinct()
@@ -409,17 +405,15 @@ class TransitionView(ActiveSubmoduleByAssetMixin, _AssetSearch):
             try:
                 dispatcher.run()
             except PostTransitionException as e:
-                self.transition_ended = False
                 messages.error(self.request, _(e.message))
-            else:
-                self.report_file_path = dispatcher.report_file_patch
-                self.report_file_name = dispatcher.get_report_file_name
-                self.transition_history = dispatcher.get_transition_history_object()  # noqa
-                messages.success(
-                    self.request,
-                    _("Transitions performed successfully"),
-                )
-                self.transition_ended = True
+            self.report_file_path = dispatcher.report_file_patch
+            self.report_file_name = dispatcher.get_report_file_name
+            self.transition_history = dispatcher.get_transition_history_object()  # noqa
+            messages.success(
+                self.request,
+                _("Transitions performed successfully"),
+            )
+            self.transition_ended = True
             return super(TransitionView, self).get(*args, **kwargs)
         messages.error(self.request, _('Please correct errors.'))
         return super(TransitionView, self).get(*args, **kwargs)

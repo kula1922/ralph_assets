@@ -6,8 +6,11 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import datetime
+import itertools as it
+from datetime import timedelta
 from unittest import skip
 
+import factory
 from django.test import TestCase
 
 from ralph.business.models import Venture
@@ -26,6 +29,7 @@ from ralph_assets.tests.utils.assets import (
     AssetModelFactory,
     AssetFactory,
     DCAssetFactory,
+    DeviceInfoFactory,
     RackFactory,
     ServiceFactory,
 )
@@ -84,7 +88,7 @@ class TestModelAsset(TestCase):
         self.assertEqual(self.asset2.is_discovered, False)
         self.assertEqual(self.asset3.is_discovered, False)
 
-    def test_is_deperecation(self):
+    def test_is_deperecated(self):
         date = datetime.date(2014, 03, 29)
         self.assertEqual(self.asset.get_deprecation_months(), 12)
         self.assertEqual(self.asset2.get_deprecation_months(), 24)
@@ -99,6 +103,27 @@ class TestModelAsset(TestCase):
             self.asset_depr_date.is_deprecated(datetime.date(2014, 12, 20)),
             True,
         )
+
+    def test_asset_is_liquidated(self):
+        date = datetime.date.today()
+        self.assertFalse(self.asset.is_liquidated(date))
+
+        self.asset.status = AssetStatus.liquidated
+        self.asset.save()
+
+        self.assertTrue(self.asset.is_liquidated(date + timedelta(days=1)))
+        self.assertTrue(self.asset.is_liquidated(date))
+        self.assertFalse(self.asset.is_liquidated(date + timedelta(days=-1)))
+
+    def test_asset_reverted_from_liquidated_state(self):
+        date = datetime.date.today()
+        self.asset.status = AssetStatus.liquidated
+        self.asset.save()
+        self.asset.status = AssetStatus.used
+        self.asset.save()
+        self.assertFalse(self.asset.is_liquidated(date + timedelta(days=1)))
+        self.assertFalse(self.asset.is_liquidated(date))
+        self.assertFalse(self.asset.is_liquidated(date + timedelta(days=-1)))
 
     def test_venture(self):
         venture = Venture.objects.create(name='v1')
@@ -292,6 +317,32 @@ class TestModelHistory(TestCase):
             self.assertEqual(i + 3, history.count())
 
 
+class BladeDeviceInfoFactory(DeviceInfoFactory):
+    """Creates DeviceInfo for elements in a blade system"""
+    slot_no = factory.Iterator(it.count(1))
+
+
+class BladeAssetFactory(DCAssetFactory):
+    """Creates Assets in a blade system"""
+    device_info = factory.SubFactory(BladeDeviceInfoFactory)
+
+
+def ab_iterator():
+    for i in it.count(1):
+        yield str(i) + 'A'
+        yield str(i) + 'B'
+
+
+class BladeDeviceInfoABFactory(DeviceInfoFactory):
+    """Creates DeviceInfo for elements in a blade system (AB mode)"""
+    slot_no = factory.Iterator(ab_iterator())
+
+
+class BladeAssetABFactory(DCAssetFactory):
+    """Creates Assets in a blade system (AB mode)"""
+    device_info = factory.SubFactory(BladeDeviceInfoABFactory)
+
+
 class TestModelRack(TestCase):
     def test_free_u(self):
         rack = RackFactory()
@@ -314,31 +365,67 @@ class TestModelRack(TestCase):
             rack.free_u, rack_height - (asset_count * model_height)
         )
 
-    def test_get_child_for_blade_chasiss(self):
+    def test_chassis_returns_childre_with_gaps(self):
         position = 3
         rack = RackFactory()
-        chasiss = DCAssetFactory(
+        chassis = DCAssetFactory(
             device_info__rack=rack,
             device_info__position=position,
             model__height_of_device=10,
         )
-        [
-            DCAssetFactory(
-                device_info__rack=rack,
-                device_info__position=position,
-                model__category__is_blade=True,
-            )
-            for _ in range(5)
-        ]
-        [
-            DCAssetFactory(
-                device_info__position=position,
-                model__category__is_blade=True,
-            )
-            for _ in range(4)
-        ]
-        children = chasiss.get_related_assets()
-        self.assertEqual(children.count(), 5)
+        blades = BladeAssetFactory.create_batch(
+            5,
+            device_info__rack=rack,
+            device_info__position=position,
+            model__category__is_blade=True,
+        )
+        # Create a gap
+        blades[2].delete()
+        BladeAssetFactory.create_batch(
+            4,
+            device_info__position=position,
+            model__category__is_blade=True,
+        )
+        children = chassis.get_related_assets()
+        self.assertEqual(len(children), 5)
+        self.assertIn(
+            ('3', '-'),
+            {
+                (asset.device_info.slot_no, asset.model.name)
+                for asset in children
+            }
+        )
+
+    def test_chassis_returns_childre_with_gaps_ab(self):
+        position = 3
+        rack = RackFactory()
+        chassis = DCAssetFactory(
+            device_info__rack=rack,
+            device_info__position=position,
+            model__height_of_device=10,
+        )
+        blades = BladeAssetABFactory.create_batch(
+            5,
+            device_info__rack=rack,
+            device_info__position=position,
+            model__category__is_blade=True,
+        )
+        # Create a gap
+        blades[2].delete()
+        BladeAssetABFactory.create_batch(
+            4,
+            device_info__position=position,
+            model__category__is_blade=True,
+        )
+        children = chassis.get_related_assets()
+        self.assertEqual(len(children), 6)
+        self.assertIn(
+            ('2A', '-'),
+            {
+                (asset.device_info.slot_no, asset.model.name)
+                for asset in children
+            }
+        )
 
 
 class TestModelDeprecatedDataCenter(TestCase):

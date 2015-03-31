@@ -28,16 +28,10 @@ from ralph.discovery.models_device import (
     DeviceType,
 )
 from ralph.discovery.models_util import SavingUser
+from ralph_assets.history.models import HistoryMixin
 
 
 logger = logging.getLogger(__name__)
-
-INVALID_DATA_CENTER = 1
-INVALID_SERVER_ROOM = 2
-INVALID_ORIENTATION = 3
-INVALID_POSITION = 4
-REQUIRED_SLOT_NUMBER = 5
-INVALID_SLOT_NUMBER = 6
 
 # i.e. number in range 1-16 and optional postfix 'A' or 'B'
 VALID_SLOT_NUMBER_FORMAT = re.compile('^([1-9][A,B]?|1[0-6][A,B]?)$')
@@ -313,47 +307,35 @@ class DeviceInfo(TimeTrackable, SavingUser, SoftDeletable):
         """
         if self.rack and self.server_room:
             if self.rack.server_room != self.server_room:
-                msg = 'Valid server room for this rack is: "{}"'.format(
-                    self.rack.server_room.name,
-                )
-                raise ValidationError(
-                    {'server_room': msg}, code=INVALID_SERVER_ROOM,
-                )
+                msg = 'This rack is not from picked server room'
+                raise ValidationError({'rack': [msg]})
         if self.server_room and self.data_center:
             if self.server_room.data_center != self.data_center:
-                msg = 'Valid data center for this server room is: "{}"'.format(
-                    self.server_room.data_center.name,
-                )
-                raise ValidationError(
-                    {'data_center': msg}, code=INVALID_DATA_CENTER,
-                )
+                msg = 'This server room is not from picked data center'
+                raise ValidationError({'server_room': [msg]})
         if self.position == 0 and not Orientation.is_width(self.orientation):
             msg = 'Valid orientations for picked position are: {}'.format(
                 ', '.join(
                     choice.desc for choice in Orientation.WIDTH.choices
                 )
             )
-            raise ValidationError(
-                {'orientation': msg}, code=INVALID_ORIENTATION
-            )
+            raise ValidationError({'orientation': [msg]})
         if self.position > 0 and not Orientation.is_depth(self.orientation):
             msg = 'Valid orientations for picked position are: {}'.format(
                 ', '.join(
                     choice.desc for choice in Orientation.DEPTH.choices
                 )
             )
-            raise ValidationError(
-                {'orientation': msg}, code=INVALID_ORIENTATION,
-            )
+            raise ValidationError({'orientation': [msg]})
         if self.rack and self.position > self.rack.max_u_height:
             msg = 'Position is higher than "max u height" = {}'.format(
                 self.rack.max_u_height,
             )
-            raise ValidationError({'position': msg}, code=INVALID_POSITION)
+            raise ValidationError({'position': [msg]})
         if self.slot_no and not VALID_SLOT_NUMBER_FORMAT.search(self.slot_no):
             msg = ("Slot number should be a number from range 1-16 with "
                    "an optional postfix 'A' or 'B' (e.g. '16A')")
-            raise ValidationError({'slot_no': msg}, code=INVALID_SLOT_NUMBER)
+            raise ValidationError({'slot_no': [msg]})
 
     @property
     def size(self):

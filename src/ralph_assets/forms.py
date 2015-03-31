@@ -12,6 +12,7 @@ from ajax_select.fields import (
     AutoCompleteSelectField,
     AutoCompleteField,
     AutoCompleteSelectMultipleField,
+    CascadeModelChoiceField,
 )
 from bob.forms import (
     AJAX_UPDATE,
@@ -35,7 +36,7 @@ from django.forms import (
     ModelForm,
     ValidationError,
 )
-from django.forms.widgets import HiddenInput, Textarea, TextInput
+from django.forms.widgets import HiddenInput, Select, Textarea, TextInput
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext_lazy as _
@@ -54,7 +55,9 @@ from ralph_assets.models import (
     RALPH_DATE_FORMAT,
     Service,
 )
+from ralph_assets.models_dc_assets import DataCenter, ServerRoom, Rack
 from ralph_assets import models_assets
+from ralph_assets.signals import post_customize_fields
 from ralph.discovery import models_device
 from ralph.middleware import get_actual_regions
 from ralph.ui.widgets import DateWidget, ReadOnlyWidget, SimpleReadOnlyWidget
@@ -66,91 +69,97 @@ RALPH_DATE_FORMAT_LIST = [RALPH_DATE_FORMAT]
 
 # We use lambdas, so the fieldsets can be recreated after modifications
 
-asset_fieldset = lambda: OrderedDict([
-    ('Basic Info', [
-        'type', 'category', 'model', 'niw', 'barcode', 'sn', 'warehouse',
-        'location', 'status', 'task_url', 'loan_end_date', 'remarks',
-        'service_name', 'property_of', 'region',
-    ]),
-    ('Financial Info', [
-        'order_no', 'invoice_date', 'invoice_no', 'price', 'provider',
-        'deprecation_rate', 'source', 'request_date', 'provider_order_date',
-        'delivery_date', 'deprecation_end_date', 'budget_info',
-        'force_deprecation',
-    ]),
-    ('User Info', [
-        'user', 'owner', 'employee_id', 'company', 'department', 'manager',
-        'profit_center', 'cost_center',
-    ]),
-])
+def asset_fieldset():
+    return OrderedDict([
+        ('Basic Info', [
+            'type', 'category', 'model', 'niw', 'barcode', 'sn', 'warehouse',
+            'location', 'status', 'task_url', 'loan_end_date', 'remarks',
+            'service_name', 'property_of', 'region',
+        ]),
+        ('Financial Info', [
+            'order_no', 'invoice_date', 'invoice_no', 'price', 'provider',
+            'deprecation_rate', 'source', 'request_date',
+            'provider_order_date', 'delivery_date', 'deprecation_end_date',
+            'budget_info', 'force_deprecation',
+        ]),
+        ('User Info', [
+            'user', 'owner', 'employee_id', 'company', 'department', 'manager',
+            'profit_center', 'cost_center',
+        ]),
+    ])
 
-asset_search_back_office_fieldsets = lambda: OrderedDict([
-    ('Basic Info', {
-        'noncollapsed': [
-            'barcode', 'status', 'imei', 'sn', 'model', 'hostname',
-            'required_support', 'support_assigned', 'service',
-            'device_environment', 'region',
-        ],
-        'collapsed': [
-            'warehouse', 'task_url', 'category', 'loan_end_date_from',
-            'loan_end_date_to', 'part_info', 'niw', 'manufacturer',
-            'service_name', 'location', 'remarks',
-        ],
-    }),
-    ('User data', {
-        'noncollapsed': ['user', 'owner', 'segment'],
-        'collapsed': [
-            'company', 'department', 'employee_id', 'cost_center',
-            'profit_center',
-        ],
-    }),
-    ('Financial data', {
-        'noncollapsed': [
-            'invoice_no', 'invoice_date_from', 'invoice_date_to', 'order_no',
-            'budget_info',
-        ],
-        'collapsed': [
-            'provider', 'source', 'ralph_device_id', 'request_date_from',
-            'request_date_to', 'provider_order_date_from',
-            'provider_order_date_to', 'delivery_date_from', 'delivery_date_to',
-            'deprecation_rate',
-        ]
-    })
-])
 
-asset_search_dc_fieldsets = lambda: OrderedDict([
-    ('Basic Info', {
-        'noncollapsed': [
-            'location_name', 'barcode', 'sn', 'model', 'manufacturer',
-            'warehouse', 'required_support', 'support_assigned', 'service',
-            'device_environment', 'region', 'without_assigned_location',
-        ],
-        'collapsed': [
-            'status', 'task_url', 'category', 'loan_end_date_from',
-            'loan_end_date_to', 'part_info', 'niw', 'service_name',
-            'location', 'remarks',
-        ],
-    }),
-    ('User data', {
-        'noncollapsed': ['user', 'owner'],
-        'collapsed': [
-            'company', 'department', 'employee_id', 'cost_center',
-            'profit_center',
-        ],
-    }),
-    ('Financial data', {
-        'noncollapsed': [
-            'invoice_no', 'invoice_date_from', 'invoice_date_to', 'order_no',
-            'budget_info',
-        ],
-        'collapsed': [
-            'provider', 'source', 'ralph_device_id', 'request_date_from',
-            'request_date_to', 'provider_order_date_from',
-            'provider_order_date_to', 'delivery_date_from', 'delivery_date_to',
-            'deprecation_rate',
-        ]
-    })
-])
+def asset_search_back_office_fieldsets():
+    return OrderedDict([
+        ('Basic Info', {
+            'noncollapsed': [
+                'barcode', 'status', 'imei', 'sn', 'model', 'hostname',
+                'required_support', 'support_assigned', 'service',
+                'device_environment', 'region',
+            ],
+            'collapsed': [
+                'warehouse', 'task_url', 'category', 'loan_end_date_from',
+                'loan_end_date_to', 'part_info', 'niw', 'manufacturer',
+                'service_name', 'location', 'remarks',
+            ],
+        }),
+        ('User data', {
+            'noncollapsed': ['user', 'owner', 'segment'],
+            'collapsed': [
+                'company', 'department', 'employee_id', 'cost_center',
+                'profit_center',
+            ],
+        }),
+        ('Financial data', {
+            'noncollapsed': [
+                'invoice_no', 'invoice_date_from', 'invoice_date_to',
+                'order_no', 'budget_info',
+            ],
+            'collapsed': [
+                'provider', 'source', 'ralph_device_id', 'request_date_from',
+                'request_date_to', 'provider_order_date_from',
+                'provider_order_date_to', 'delivery_date_from',
+                'delivery_date_to', 'deprecation_rate',
+            ]
+        })
+    ])
+
+
+def asset_search_dc_fieldsets():
+    return OrderedDict([
+        ('Basic Info', {
+            'noncollapsed': [
+                'location_name', 'barcode', 'sn', 'model', 'manufacturer',
+                'warehouse', 'required_support', 'support_assigned',
+                'venture_department', 'service', 'device_environment',
+                'region', 'without_assigned_location',
+            ],
+            'collapsed': [
+                'status', 'task_url', 'category', 'loan_end_date_from',
+                'loan_end_date_to', 'part_info', 'niw', 'service_name',
+                'location', 'remarks',
+            ],
+        }),
+        ('User data', {
+            'noncollapsed': ['user', 'owner'],
+            'collapsed': [
+                'company', 'department', 'employee_id', 'cost_center',
+                'profit_center',
+            ],
+        }),
+        ('Financial data', {
+            'noncollapsed': [
+                'invoice_no', 'invoice_date_from', 'invoice_date_to',
+                'order_no', 'budget_info',
+            ],
+            'collapsed': [
+                'provider', 'source', 'ralph_device_id', 'request_date_from',
+                'request_date_to', 'provider_order_date_from',
+                'provider_order_date_to', 'delivery_date_from',
+                'delivery_date_to', 'deprecation_rate',
+            ]
+        })
+    ])
 
 LOOKUPS = {
     'asset': ('ralph_assets.models', 'DeviceLookup'),
@@ -172,6 +181,7 @@ LOOKUPS = {
     'service': ('ralph.ui.channels', 'ServiceCatalogLookup'),
     'softwarecategory': ('ralph_assets.models', 'SoftwareCategoryLookup'),
     'support': ('ralph_assets.models', 'SupportLookup'),
+    'venture_department': ('ralph_assets.models', 'VentureDepartmentLookup'),
 }
 
 
@@ -411,13 +421,13 @@ class BulkEditAssetForm(DependencyForm, ModelForm):
         ]
 
     barcode = BarcodeField(max_length=200, required=False)
-    source = ChoiceField(
-        required=False,
-        choices=[('', '----')] + AssetSource(),
-    )
     owner = AutoCompleteSelectField(
         LOOKUPS['asset_user'],
         required=False,
+    )
+    source = ChoiceField(
+        required=False,
+        choices=[('', '----')] + AssetSource(),
     )
     user = AutoCompleteSelectField(
         LOOKUPS['asset_user'],
@@ -474,10 +484,10 @@ class BackOfficeBulkEditAssetForm(BulkEditAssetForm):
     class Meta(BulkEditAssetForm.Meta):
         fields = (
             'type', 'status', 'barcode', 'hostname', 'model', 'user', 'owner',
-            'warehouse', 'sn', 'property_of', 'purpose', 'remarks',
+            'warehouse', 'sn', 'property_of', 'region', 'purpose', 'remarks',
             'service_name', 'invoice_no', 'invoice_date', 'price', 'provider',
-            'task_url', 'office_info', 'deprecation_rate', 'order_no',
-            'source', 'deprecation_end_date',
+            'task_url', 'deprecation_rate', 'order_no', 'source',
+            'deprecation_end_date', 'licences',
         )
 
     def __init__(self, *args, **kwargs):
@@ -492,6 +502,10 @@ class BackOfficeBulkEditAssetForm(BulkEditAssetForm):
     hostname = CharField(
         required=False, widget=SimpleReadOnlyWidget(),
     )
+    licences = AutoCompleteSelectMultipleField(
+        LOOKUPS['free_licences'],
+        required=False,
+    )
     model = AutoCompleteSelectField(
         LOOKUPS['asset_bomodel'],
         required=True,
@@ -503,6 +517,9 @@ class BackOfficeBulkEditAssetForm(BulkEditAssetForm):
         choices=[('', '----')] + models_assets.AssetPurpose(),
         label=_('Purpose'),
         required=False,
+    )
+    status = ChoiceField(
+        choices=AssetStatus.back_office(required=True), required=False,
     )
     type = ChoiceField(
         required=True,
@@ -528,6 +545,9 @@ class DataCenterBulkEditAssetForm(BulkEditAssetForm):
             add_link='/admin/ralph_assets/assetmodel/add/?name=',
         )
     )
+    status = ChoiceField(
+        choices=AssetStatus.data_center(required=True), required=False,
+    )
 
 
 class DeviceForm(ModelForm):
@@ -547,6 +567,30 @@ class DeviceForm(ModelForm):
     create_stock = BooleanField(
         required=False,
         label=_('Create stock device'),
+    )
+
+    data_center = ModelChoiceField(
+        label=_('data center'),
+        queryset=DataCenter.objects.all(),
+        required=True,
+        widget=Select(attrs={'id': 'data-center-selection'}),
+    )
+    server_room = CascadeModelChoiceField(
+        ('ralph_assets.models', 'ServerRoomLookup'),
+        label=_('Server room'),
+        queryset=ServerRoom.objects.all(),
+        required=True,
+
+        attrs={'id': 'server-room-selection'},
+        parent_field=data_center,
+    )
+    rack = CascadeModelChoiceField(
+        ('ralph_assets.models', 'RackLookup'),
+        label=_('Rack'),
+        queryset=Rack.objects.all(),
+        required=False,
+
+        parent_field=server_room,
     )
 
     def __init__(self, *args, **kwargs):
@@ -837,6 +881,7 @@ class BaseAssetForm(ModelForm):
             self.fields['model'].widget.channel = LOOKUPS['asset_bomodel']
             self.fields['type'].choices = [
                 (c.id, c.desc) for c in AssetType.BO.choices]
+        post_customize_fields.send(sender=self, mode=self.mode)
 
 
 class BaseAddAssetForm(DependencyAssetForm, BaseAssetForm):
@@ -1273,6 +1318,9 @@ class BackOfficeAddDeviceForm(AddDeviceForm):
         required=False,
         label=_('Service catalog'),
     )
+    status = ChoiceField(
+        choices=AssetStatus.back_office(required=True), required=False,
+    )
 
     def __init__(self, *args, **kwargs):
         super(BackOfficeAddDeviceForm, self).__init__(*args, **kwargs)
@@ -1302,6 +1350,9 @@ class DataCenterAddDeviceForm(AddDeviceForm):
         LOOKUPS['service'],
         required=True,
         label=_('Service catalog'),
+    )
+    status = ChoiceField(
+        choices=AssetStatus.data_center(required=True), required=False,
     )
 
     def __init__(self, *args, **kwargs):
@@ -1423,6 +1474,9 @@ class BackOfficeEditDeviceForm(ReadOnlyFieldsMixin, EditDeviceForm):
         required=False,
         label=_('Service catalog'),
     )
+    status = ChoiceField(
+        choices=AssetStatus.back_office(required=True), required=False,
+    )
 
     def __init__(self, *args, **kwargs):
         super(BackOfficeEditDeviceForm, self).__init__(*args, **kwargs)
@@ -1433,10 +1487,10 @@ class DataCenterEditDeviceForm(ReadOnlyFieldsMixin, EditDeviceForm):
 
     fieldsets = OrderedDict([
         ('Basic Info', [
-            'type', 'category', 'model', 'niw', 'barcode', 'sn', 'warehouse',
-            'location', 'status', 'task_url', 'loan_end_date', 'remarks',
-            'service_name', 'property_of', 'hostname', 'service',
-            'device_environment', 'region', 'management_ip',
+            'management_ip', 'type', 'category', 'model', 'niw', 'barcode',
+            'sn', 'warehouse', 'location', 'status', 'task_url',
+            'loan_end_date', 'remarks', 'service_name', 'property_of',
+            'hostname', 'service', 'device_environment', 'region',
         ]),
         ('Financial Info', [
             'order_no', 'invoice_date', 'invoice_no', 'price', 'provider',
@@ -1474,6 +1528,9 @@ class DataCenterEditDeviceForm(ReadOnlyFieldsMixin, EditDeviceForm):
         LOOKUPS['service'],
         required=True,
         label=_('Service catalog'),
+    )
+    status = ChoiceField(
+        choices=AssetStatus.data_center(required=True), required=False,
     )
 
     def __init__(self, *args, **kwargs):
@@ -1735,12 +1792,21 @@ class DataCenterSearchAssetForm(SearchAssetForm):
         help_text=None,
         plugin_options={'disable_confirm': True}
     )
+    status = ChoiceField(
+        choices=AssetStatus.data_center(required=False), required=False,
+    )
     without_assigned_location = BooleanField(
         required=False,
         help_text=(
             "Shows assets without assigned location fields, like: "
             "data center, server room, rack, etc."
         )
+    )
+    venture_department = AutoCompleteSelectField(
+        LOOKUPS['venture_department'],
+        required=False,
+        help_text=None,
+        plugin_options={'disable_confirm': True}
     )
 
 
@@ -1767,6 +1833,9 @@ class BackOfficeSearchAssetForm(SearchAssetForm):
         required=False,
     )
     segment = CharField(max_length=256, required=False)
+    status = ChoiceField(
+        choices=AssetStatus.back_office(required=False), required=False,
+    )
 
     def __init__(self, *args, **kwargs):
         super(BackOfficeSearchAssetForm, self).__init__(*args, **kwargs)
@@ -1867,3 +1936,44 @@ class SearchUserForm(Form):
         LOOKUPS['asset_user'],
         required=False,
     )
+
+
+class BladeSystemForm(ModelForm):
+
+    class Meta:
+        model = DeviceInfo
+        fields = ('data_center', 'server_room', 'rack', 'position',)
+
+    data_center = ModelChoiceField(
+        label=_('data center'),
+        queryset=DataCenter.objects.all(),
+        required=True,
+        widget=Select(attrs={'id': 'data-center-selection'}),
+    )
+    server_room = CascadeModelChoiceField(
+        ('ralph_assets.models', 'ServerRoomLookup'),
+        label=_('Server room'),
+        queryset=ServerRoom.objects.all(),
+        required=True,
+        attrs={'id': 'server-room-selection'},
+        parent_field=data_center,
+    )
+    rack = CascadeModelChoiceField(
+        ('ralph_assets.models', 'RackLookup'),
+        label=_('Rack'),
+        queryset=Rack.objects.all(),
+        required=False,
+        parent_field=server_room,
+    )
+
+
+class BladeServerForm(ModelForm):
+
+    class Meta:
+        model = DeviceInfo
+        fields = ('slot_no',)
+
+    def __init__(self, *args, **kwargs):
+        super(BladeServerForm, self).__init__(*args, **kwargs)
+        for field_name in self.Meta.fields:
+            self.fields[field_name].label = ''

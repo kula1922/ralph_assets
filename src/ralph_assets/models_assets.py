@@ -11,6 +11,8 @@ from __future__ import unicode_literals
 import datetime
 import logging
 import os
+import re
+from collections import namedtuple
 
 from dateutil.relativedelta import relativedelta
 
@@ -64,12 +66,7 @@ from ralph_assets.models_dc_assets import (  # noqa
     DeprecatedRalphRack,
     DeprecatedRalphRackManager,
     DeviceInfo,
-    INVALID_DATA_CENTER,
-    INVALID_ORIENTATION,
-    INVALID_POSITION,
-    INVALID_SERVER_ROOM,
     Orientation,
-    REQUIRED_SLOT_NUMBER,
     Rack,
     ServerRoom,
     device_post_delete,
@@ -193,11 +190,46 @@ class AssetStatus(Choices):
     in_service = _("in service")
     in_repair = _("in repair")
     ok = _("ok")
+    to_deploy = _("to deploy")
 
     SOFTWARE = Choices.Group(100)
     installed = _("installed")
     free = _("free")
     reserved = _("reserved")
+
+    @classmethod
+    def _filter_status(cls, asset_type, required=True):
+        """
+        Filter choices depending on 2 things:
+
+            1. defined ASSET_STATUSES in settings (if not defined returns all
+                statuses)
+            2. passed *asset_type* (which is one of keys from ASSET_STATUSES)
+
+        :param required: prepends empty value to choices
+        """
+        customized = getattr(settings, 'ASSET_STATUSES', None)
+        found = [] if required else [('', '----')]
+        if not customized:
+            found.extend(AssetStatus())
+            return found
+        for key in customized[asset_type]:
+            try:
+                choice = getattr(AssetStatus, key)
+            except AttributeError:
+                msg = ("No such choice {!r} in AssetStatus"
+                       " - check settings").format(key)
+                raise Exception(msg)
+            found.append((choice.id, unicode(choice)))
+        return found
+
+    @classmethod
+    def data_center(cls, required):
+        return AssetStatus._filter_status('data_center', required)
+
+    @classmethod
+    def back_office(cls, required):
+        return AssetStatus._filter_status('back_office', required)
 
 
 class AssetSource(Choices):
@@ -251,7 +283,7 @@ class AssetModel(
     manufacturer = models.ForeignKey(
         AssetManufacturer, on_delete=models.PROTECT, blank=True, null=True)
     category = models.ForeignKey(
-        'AssetCategory', null=True, blank=True, related_name='models'
+        'AssetCategory', null=True, related_name='models'
     )
     power_consumption = models.IntegerField(
         verbose_name=_("Power consumption"),
@@ -364,7 +396,7 @@ class DCAdminManager(models.Manager):
         )
 
 
-class AssetAdminManager(models.Manager):
+class AssetAdminManager(RegionalizedDBManager):
     pass
 
 
@@ -420,7 +452,7 @@ class BudgetInfo(
 
 class AssetLastHostname(models.Model):
     prefix = models.CharField(max_length=8, db_index=True)
-    counter = models.PositiveSmallIntegerField(default=1)
+    counter = models.PositiveIntegerField(default=1)
     postfix = models.CharField(max_length=8, db_index=True)
 
     class Meta:
@@ -450,6 +482,27 @@ class AssetLastHostname(models.Model):
             return cls.objects.get(pk=obj.pk)
         else:
             return obj
+
+
+class Gap(object):
+    """A placeholder that represents a gap in a blade chassis"""
+
+    id = 0
+    barcode = '-'
+    sn = '-'
+    service = namedtuple('Service', ['name'])('-')
+    model = namedtuple('Model', ['name'])('-')
+    url = ''
+    linked_device = None
+
+    def __init__(self, slot_no):
+        self.slot_no = slot_no
+
+    @property
+    def device_info(self):
+        return namedtuple('DeviceInfo', ['slot_no', 'ralph_device_id'])(
+            self.slot_no, None
+        )
 
 
 class Asset(
@@ -487,6 +540,7 @@ class Asset(
         max_length=128, db_index=True, null=True, blank=True,
     )
     order_no = models.CharField(max_length=50, null=True, blank=True)
+    purchase_order = models.CharField(max_length=50, null=True, blank=True)
     invoice_date = models.DateField(null=True, blank=True)
     sn = models.CharField(max_length=200, null=True, blank=True, unique=True)
     barcode = models.CharField(
@@ -833,6 +887,21 @@ class Asset(
             )
         return deprecation_date < date
 
+    def is_liquidated(self, date=None):
+        date = date or datetime.date.today()
+        # check if asset has status 'liquidated' and if yes, check if it has
+        # this status on given date
+        if self.status == AssetStatus.liquidated and self._liquidated_at(date):
+            return True
+        return False
+
+    def _liquidated_at(self, date):
+        liquidated_history = self.get_history().filter(
+            new_value='liquidated',
+            field_name='status',
+        ).order_by('-date')[:1]
+        return liquidated_history and liquidated_history[0].date.date() <= date
+
     def delete_with_info(self, *args, **kwargs):
         """
         Remove Asset with linked info-tables alltogether, because cascade
@@ -896,10 +965,40 @@ class Asset(
         return self.type
 
     def get_related_assets(self):
-        return Asset.objects.select_related('device_info', 'model').filter(
-            device_info__position=self.device_info.position,
-            device_info__rack=self.device_info.rack,
-        ).exclude(id=self.id)
+        """Returns the children of a blade chassis"""
+        assets = list(
+            Asset.objects.select_related('device_info', 'model').filter(
+                device_info__position=self.device_info.position,
+                device_info__rack=self.device_info.rack,
+            ).exclude(id=self.id)
+        )
+        if not assets:
+            return []
+
+        def get_number(slot_no):
+            """Returns the integer part of slot number"""
+            m = re.match('(\d+)', slot_no)
+            return (m and int(m.group(0))) or 0
+
+        max_slot_no = max([
+            get_number(asset.device_info.slot_no)
+            for asset in assets
+        ])
+        first_asset_slot_no = assets[0].device_info.slot_no
+        ab = first_asset_slot_no and first_asset_slot_no[-1] in {'A', 'B'}
+        slot_nos = {asset.device_info.slot_no for asset in assets}
+
+        def handle_missing(slot_no):
+            if slot_no not in slot_nos:
+                assets.append(Gap(slot_no))
+
+        for slot_no in xrange(1, max_slot_no + 1):
+            if ab:
+                for letter in ['A', 'B']:
+                    handle_missing(str(slot_no) + letter)
+            else:
+                handle_missing(str(slot_no))
+        return assets
 
     def get_orientation_desc(self):
         return self.device_info.get_orientation_desc()

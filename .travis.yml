@@ -1,8 +1,17 @@
 language: python
+env:
+  matrix:
+    - DJANGO_VERSION=1.4.16
+    - DJANGO_VERSION=1.6.8
+matrix:
+  fast_finish: true
+  allow_failures:
+    - env: DJANGO_VERSION=1.6.8
 python:
   - "2.7"
 # command to install dependencies, e.g. pip install -r requirements.txt --use-mirrors
 install:
+    - pip install https://github.com/chapmanb/python-graph/releases/download/1.8.2/python-graph-core-1.8.2.tar.gz
     - pip install git+https://github.com/zefciu/django-search-forms.git@develop
     - pip install git+https://github.com/quamilek/bob-ajax-selects.git@develop
     - pip install git+https://github.com/allegro/django-bob.git@develop
@@ -12,6 +21,8 @@ install:
 before_install:
     - pip install flake8 --use-mirrors
     - make flake
+before_script:
+  mysql -e 'CREATE DATABASE ralph CHARACTER SET utf8 COLLATE utf8_general_ci;'
 script:
   make test-with-coveralls
 after_success:

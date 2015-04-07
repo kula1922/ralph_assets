@@ -28,7 +28,6 @@ from ralph.discovery.models_device import (
     DeviceType,
 )
 from ralph.discovery.models_util import SavingUser
-from ralph_assets.history.models import HistoryMixin
 
 
 logger = logging.getLogger(__name__)
@@ -285,16 +284,6 @@ class DeviceInfo(TimeTrackable, SavingUser, SoftDeletable):
         default=Orientation.front.id,
     )
 
-    # @property
-    # def ralph_device_id(self):
-    #     # return self.ralph_device_id_old
-    #     if self.ralph_device:
-    #         return self.ralph_device.id
-
-    # @ralph_device_id.setter
-    # def ralph_device_id(self, value):
-    #     self.ralph_device_id_old = value
-
     def clean_fields(self, exclude=None):
         """
         Constraints:
@@ -344,15 +333,15 @@ class DeviceInfo(TimeTrackable, SavingUser, SoftDeletable):
 
     def __unicode__(self):
         return "{} - {}".format(
-            self.ralph_device_id,
+            self.ralph_device.id if self.ralph_device else None,
             self.size,
         )
 
     def get_ralph_device(self):
-        if not self.ralph_device_id:
+        if not self.ralph_device:
             return None
         try:
-            dev = Device.objects.get(id=self.ralph_device_id)
+            dev = Device.objects.get(id=self.ralph_device.id)
             return dev
         except Device.DoesNotExist:
             return None
@@ -372,22 +361,22 @@ class DeviceInfo(TimeTrackable, SavingUser, SoftDeletable):
     dispatch_uid='discovery.device.post_delete',
 )
 def device_post_delete(sender, instance, **kwargs):
-    for deviceinfo in DeviceInfo.objects.filter(ralph_device_id=instance.id):
-        deviceinfo.ralph_device_id = None
+    for deviceinfo in DeviceInfo.objects.filter(ralph_device=instance):
+        deviceinfo.ralph_device = None
         deviceinfo.save()
 
 
 @receiver(post_save, sender=Device, dispatch_uid='ralph_assets.device_delete')
 def device_post_save(sender, instance, **kwargs):
     """
-    A hook for cleaning ``ralph_device_id`` in ``DeviceInfo`` when device
+    A hook for cleaning ``ralph_device`` in ``DeviceInfo`` when device
     linked to it gets soft-deleted (hence post-save signal instead of
     pre-delete or post-delete).
     """
     if instance.deleted:
         try:
-            di = DeviceInfo.objects.get(ralph_device_id=instance.id)
-            di.ralph_device_id = None
+            di = DeviceInfo.objects.get(ralph_device=instance)
+            di.ralph_device = None
             di.save()
         except (DeviceInfo.DoesNotExist, DatabaseError):
             pass
